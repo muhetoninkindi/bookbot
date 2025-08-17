@@ -1,0 +1,125 @@
+---
+- name: Install Odoo with OpenEduCat
+  hosts: all
+  become: yes
+
+  vars:
+    odoo_version: "16.0"
+    odoo_user: "odoo"
+    odoo_home: "/opt/odoo"
+    odoo_port: 8069
+    postgres_user: "odoo"
+    postgres_password: "odoo"
+    openeducat_repo: "https://github.com/OpenEduCat/OpenEduCat.git"
+    openeducat_branch: "16.0"
+
+  tasks:
+    - name: Install dependencies
+      apt:
+        name:
+          - git
+          - python3-pip
+          - python3-dev
+          - build-essential
+          - libxml2-dev
+          - libxslt1-dev
+          - zlib1g-dev
+          - libsasl2-dev
+          - libldap2-dev
+          - libssl-dev
+          - libjpeg-dev
+          - libpq-dev
+          - postgresql
+          - postgresql-server-dev-all
+          - npm
+          - nodejs
+        state: present
+        update_cache: yes
+
+    - name: Create Odoo user
+      user:
+        name: "{{ odoo_user }}"
+        system: yes
+        shell: /bin/bash
+        create_home: yes
+
+    - name: Create Odoo home directory
+      file:
+        path: "{{ odoo_home }}"
+        state: directory
+        owner: "{{ odoo_user }}"
+        group: "{{ odoo_user }}"
+
+    - name: Clone Odoo
+      git:
+        repo: "https://www.github.com/odoo/odoo.git"
+        dest: "{{ odoo_home }}/odoo"
+        version: "{{ odoo_version }}"
+        update: yes
+        force: yes
+        accept_hostkey: yes
+      become_user: "{{ odoo_user }}"
+
+    - name: Clone OpenEduCat
+      git:
+        repo: "{{ openeducat_repo }}"
+        dest: "{{ odoo_home }}/odoo/addons/openeducat"
+        version: "{{ openeducat_branch }}"
+        update: yes
+        force: yes
+        accept_hostkey: yes
+      become_user: "{{ odoo_user }}"
+
+    - name: Install Python requirements
+      pip:
+        requirements: "{{ odoo_home }}/odoo/requirements.txt"
+        executable: pip3
+
+    - name: Ensure PostgreSQL user exists
+      become_user: postgres
+      postgresql_user:
+        name: "{{ postgres_user }}"
+        password: "{{ postgres_password }}"
+        state: present
+
+    - name: Create Odoo config file
+      copy:
+        dest: "{{ odoo_home }}/odoo.conf"
+        content: |
+          [options]
+          ; This is the Odoo configuration file
+          admin_passwd = admin
+          db_host = False
+          db_port = False
+          db_user = {{ postgres_user }}
+          db_password = {{ postgres_password }}
+          addons_path = {{ odoo_home }}/odoo/addons,{{ odoo_home }}/odoo/addons/openeducat
+          xmlrpc_port = {{ odoo_port }}
+        owner: "{{ odoo_user }}"
+        group: "{{ odoo_user }}"
+        mode: '0644'
+
+    - name: Create systemd service for Odoo
+      copy:
+        dest: /etc/systemd/system/odoo.service
+        content: |
+          [Unit]
+          Description=Odoo
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ odoo_user }}
+          ExecStart={{ odoo_home }}/odoo/odoo-bin -c {{ odoo_home }}/odoo.conf
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: Restart Odoo
+
+  handlers:
+    - name: Restart Odoo
+      systemd:
+        name: odoo
+        state: restarted
+        enabled: yes
